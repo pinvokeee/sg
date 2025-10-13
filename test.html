@@ -1,0 +1,386 @@
+<body>
+
+    <style>
+
+        body {
+            padding: 0;
+            margin: 0;
+        }
+
+        .container {
+            width: 100vw;
+            height: 100vh;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-rows: auto auto auto 1fr;
+            height: 100%;
+            width: 100%;
+        }
+
+        .preview {
+            width: 100%;
+            height: 100%;
+            border: solid 1px gray;
+            box-sizing: border-box;
+        }
+
+    </style>
+
+    <div class="container">
+
+        <div class="grid">
+
+            <h1>SVGFlowChartConverter</h1>
+
+            <div>
+                <span>拡大率</span>
+                <input type="number" min="0" step="1" value="25" id="ratio"><span>%</span>                
+            </div>
+
+            <div>
+                <div>プレビュー</div>
+                <button>ダウンロード</button>
+            </div>
+
+            <iframe class="preview" id="preview" srcdoc=""></iframe>
+
+        </div>
+
+    </div>
+
+    
+
+    <script>
+
+        const measureTextHeight = (font, size, text, weight) => {
+
+            const div = document.createElement('text');
+            div.innerHTML = text;
+            div.setAttribute("font-family", font);
+            div.setAttribute("font-size", size);
+            div.setAttribute("font-weight", weight);
+
+            div.style.margin = '0 !important';
+            div.style.padding = '0 !important';
+            div.style.position = 'absolute !important';
+            div.style.whiteSpace = "pre";
+
+            if (weight) div.style.fontWeight = weight;
+
+            div.style.left = '-99999px !important';
+            div.style.fontFamily = font;
+            div.style.whiteSpace = "pre";
+            div.style.fontSize = size;
+            document.body.appendChild(div);
+
+            const box = div.getBoundingClientRect();
+
+            const width = box.width;
+            const height = box.height;
+            document.body.removeChild(div);
+            
+            return { width, height };
+        }
+
+        const isContained = (parentRect, childPos) => {
+            return childPos.x >= parentRect.x
+                && childPos.y >= parentRect.y 
+                && childPos.x <= parentRect.x + parentRect.width 
+                && childPos.y <= parentRect.y + parentRect.height;
+        }
+    
+        const isTextTagName = (tagName) => {
+            const textTagName = "text";
+            const groupTagName = "g";
+            return (tagName == textTagName || tagName == groupTagName)
+        }
+
+        const calcLineBreakCount = (currentText, preText) => {
+
+            //想定のY座標
+            const exp = (preText.y + preText.height + currentText.height);
+
+            //実際のY座標
+            const arh = (currentText.y + currentText.height);
+
+            //想定とのギャップを算出する
+            const gap = arh - exp;
+
+            //ギャップが今回の行の高さより高ければ、空行ありとして判断する
+            if (gap > currentText.height) {
+                
+                //ギャップから空行の数を計算し、その数だけ行として追加する
+                // lines.push(...(new Array(Math.round(gap / text.height))).fill(""));
+                const len = Math.round(gap / currentText.height);
+                return len;
+            }
+
+            return 0;
+        }
+
+        const calcIndentCount = (currentText, preText) => {
+            
+            let gap = 0;
+
+            if (preText.y != currentText.y) {
+                gap = currentText.x - preText.x;
+            } else {
+                gap = currentText.x - (preText.x + preText.width);
+            }
+
+            const { width } = measureTextHeight(currentText.fontFamily, currentText.fontSize, " ", currentText.fontWeight);
+            const len = Math.round(gap / width);
+
+            if (len > 0) return len;
+            return 0;
+        }
+
+        const formatTextElement = (currentText, preText) => {
+            
+            if (preText) {                
+                const lineBreakCount = calcLineBreakCount(currentText, preText);
+                if (lineBreakCount > 0) preText.text += "\n" + "\n".repeat(lineBreakCount);
+        
+                const indentCount = calcIndentCount(currentText, preText);
+                if (indentCount > 0) currentText.text = " ".repeat(indentCount) + currentText.text;
+            }
+        }
+
+        const extractTextElement = (parentRect) => {
+
+            const texts = [];
+
+            //連続した要素かつ矩形内に存在するtext要素だったら、のパターン
+            let nextElement = parentRect.element.nextElementSibling;
+            let lastText = undefined;
+
+            while (nextElement && isTextTagName(nextElement.tagName)) {
+
+                const target = nextElement.tagName == "text" ? nextElement : nextElement.firstElementChild;
+
+                const { e, f }  = target?.transform.baseVal[0].matrix;
+                
+                const x = e, y = f;
+
+                const fontFamily = target.getAttribute("font-family");
+                const fontSize = target.getAttribute("font-size");
+                const fontColor = target.getAttribute("fill");
+                const fontWeight = target.getAttribute("font-weight");
+                const textContent = target.textContent;
+
+                const { width: textWidth, height: textHeight } = measureTextHeight(fontFamily, fontSize, textContent, fontWeight);
+            
+                if (isContained(parentRect, { x, y })) 
+                {
+                    const text = {
+                        element: target,
+                        fontFamily,
+                        fontSize,
+                        fontWeight,
+                        text: textContent,
+                        x,
+                        y,
+                        color: fontColor,
+                        width: textWidth,
+                        height: textHeight,
+                    };
+
+                    formatTextElement(text, lastText);
+
+                    if (lastText && text.y == lastText.y) {
+                        texts[texts.length - 1].push(text);
+                    } else {
+                        texts.push([text]);
+                    }
+
+                    lastText = text;
+                }
+
+                nextElement = nextElement.nextElementSibling;
+            }
+
+            return texts;
+        }
+
+        const toRectStructures = (rectangles) => {
+
+            const rectStructures = [];
+
+            for (const rect of rectangles) {
+
+                const { x, y, width, height } = rect;
+                const rx = x.baseVal.value, ry = y.baseVal.value, rwidth = width?.baseVal?.value, rheight = height?.baseVal?.value; 
+
+                const rectStructure = { 
+                    element: rect, 
+                    x: rx, 
+                    y: ry, 
+                    width: rwidth, 
+                    height: rheight, 
+                    fontFamily: "",
+                    fontSize: "",
+                    textBlocks: []
+                };
+
+                rectStructure.textBlocks = extractTextElement(rectStructure);
+
+                rectStructures.push(rectStructure);
+            }
+
+            return rectStructures;
+        }
+
+        const getFormattedSource = (source) => {
+
+            const parser = new DOMParser();
+            const svg = parser.parseFromString(source, "image/svg+xml");
+
+            const svgw = Number(svg.rootElement.getAttribute("width"));
+            const svgh = Number(svg.rootElement.getAttribute("height"));
+
+            const svgrw = svgw * 0.25;
+            const svgrh = svgh * 0.25;
+
+            svg.rootElement.setAttribute("viewBox", `0 0 ${svgw} ${svgh}`);
+            svg.rootElement.setAttribute("width", `${svgrw}`);
+            svg.rootElement.setAttribute("height", `${svgrh}`);
+            svg.rootElement.style.overflow = "auto";
+            
+            const rects = svg.rootElement.querySelectorAll("g > rect");
+            const texts = svg.rootElement.querySelectorAll("g > text");
+
+            const rectStructures = toRectStructures(rects);
+            const textStructures = [];
+    
+            for (const rect of rectStructures) {
+
+                if (rect.textBlocks.length > 1) {
+                    
+                    const lines = [];
+                    const elements = [];
+
+                    let lastText = undefined;
+
+                    const foreignObject = document.createElementNS("http://www.w3.org/2000/svg", "foreignObject");
+                    foreignObject.setAttribute("x", rect.x);
+                    foreignObject.setAttribute("y", rect.y);
+                    foreignObject.setAttribute("width", rect.width);
+                    foreignObject.setAttribute("height", rect.height);
+                    foreignObject.style.padding = "4px";
+
+                    const textarea = document.createElement("div");
+                    textarea.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
+                    textarea.style.backgroundColor = "transparent";
+                    textarea.style.padding = "6px";
+                    textarea.style.resize = "none";
+                    textarea.style.paddingLeft = "32px";
+                    textarea.style.border = "none";
+                    textarea.style.outline = "none";
+                    textarea.tabIndex = "-1";
+                    
+                    for (const block of rect.textBlocks) {
+
+                        const line = document.createElement("div");
+
+                        for (const text of block) {
+
+                            text.element?.remove();
+
+                            const span = document.createElement("span");
+                            span.innerText = text.text ?? "";
+                            span.style.color = text.color;
+                            span.style.fontFamily = text.fontFamily;
+                            span.style.fontSize = text.fontSize;
+                            span.style.fontWeight = text.fontWeight;
+                            span.style.whiteSpace = "pre";
+
+                            line.appendChild(span);
+                        }
+
+                        textarea.appendChild(line);
+                    }
+
+                    foreignObject.appendChild(textarea);
+                    rect.element.parentElement.insertBefore(foreignObject, rect.element.nextSibling);
+                } 
+            }
+
+            return svg.rootElement.outerHTML;
+        }
+
+        const previewConverttedSVG = (source) => {
+            const fomattedSource = getFormattedSource(source);
+            document.querySelector("#preview").setAttribute("srcdoc", fomattedSource);
+        }
+
+        const downloadSVGFile = (fileName, content) => {
+            
+            // const text = '\uFEFFこれはサンプルのテキストです。\n2行目です。';
+            const text = content;
+
+            // Blob を作成（UTF-8）
+            const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+
+            a.href = url;
+            a.download = filename;
+            a.style.display = 'none';
+            
+            document.body.appendChild(a);
+            a.click();
+
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        let sourceFile = {
+            fileName: "",
+            content: "",
+        };
+
+        // ratio
+
+        document.querySelector("#ratio").addEventListener("change", e => e.target.value);
+
+        const dropZone = document.querySelector(".container");
+
+        // デフォルト動作を無効化
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, e => e.preventDefault());
+        dropZone.addEventListener(eventName, e => e.stopPropagation());
+        });
+
+        // ドラッグ中の見た目変更
+        dropZone.addEventListener('dragover', () => dropZone.classList.add('dragover'));
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+
+        // ドロップ時の処理
+        dropZone.addEventListener('drop', e => {
+
+            dropZone.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            const targetFile = files[0];
+
+            const reader = new FileReader();
+
+            reader.onload = (event) => {
+                sourceFile.content = event.target.result;
+                previewConverttedSVG(sourceFile.content);
+            };
+
+            reader.onerror = () => {
+            };
+
+            sourceFile.name = targetFile.name;
+            
+            reader.readAsText(targetFile, 'utf-8'); // UTF-8として読み込み
+        });
+
+
+    </script>
+
+</body>
