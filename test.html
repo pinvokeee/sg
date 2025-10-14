@@ -280,6 +280,12 @@
                     textarea.style.outline = "none";
                     textarea.tabIndex = "-1";
                     
+                    const y = rect.textBlocks[0].y ?? 0;
+                    const h = rect.textBlocks[rect.textBlocks.length - 1].y + rect.textBlocks[rect.textBlocks.length - 1].height ?? 0;
+
+                    getLayout(rect, y, h);
+                    console.log(rect.textBlocks.map(t => t));
+
                     for (const block of rect.textBlocks) {
 
                         const line = document.createElement("div");
@@ -308,6 +314,12 @@
             }
 
             return svg.rootElement.outerHTML;
+        }
+
+        const getLayout = (rect, y, height) => {
+            const centerY = rect.y + rect.height / 2;
+            const vertical = (Math.abs(y - centerY) < rect.height * 0.1) ? '中央寄せ' : '上寄せ';
+            console.log(vertical, Math.abs(y - centerY), rect.height * 0.1);
         }
 
         const previewConverttedSVG = (source) => {
@@ -375,7 +387,7 @@
             reader.onerror = () => {
             };
 
-            sourceFile.name = targetFile.name;
+            sourceFile.fileName = targetFile.name;
             
             reader.readAsText(targetFile, 'utf-8'); // UTF-8として読み込み
         });
